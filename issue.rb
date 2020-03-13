@@ -69,6 +69,7 @@ describe 'verify "DISTINCT ON" queries' do
     Activation.create(user: user, post: @new_post, activated_at: '2020-01-02')
   end
 
+  # NG!
   it "#1 EXPECTED" do
     latest_activated_posts_each_users = Post.joins(:activations).select("distinct on (user_id) *").order("user_id, activated_at desc")
     assert_equal latest_activated_posts_each_users, [@new_post]
@@ -83,6 +84,7 @@ describe 'verify "DISTINCT ON" queries' do
     end
   end
 
+  # OK!
   it '#2 EXPECTED' do
     latest_activated_posts_each_users = Post.from(Post.joins(:activations).select("distinct on (user_id) *").order("user_id, activated_at desc"), :posts)
     assert_equal latest_activated_posts_each_users, [@new_post]
