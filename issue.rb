@@ -47,6 +47,9 @@ end
 class User < ActiveRecord::Base
   has_many :activations
   has_many :posts, through: :activations
+
+  has_one :latest_activation, -> { where(id: latests) }, class_name: 'Activation'
+  has_one :latest_activated_post, through: :latest_activation, source: :post
 end
 
 class Post < ActiveRecord::Base
@@ -65,14 +68,18 @@ class Activation < ActiveRecord::Base
   scope :latests, -> { select('DISTINCT ON (user_id) id').order('user_id, activated_at DESC') }
 end
 
+class LastActivatedPost < Post
+  default_scope { joins(:latest_activations) }
+end
+
 require 'minitest/autorun'
 describe 'verify "DISTINCT ON" queries' do
   before :all do
-    user = User.create(name: 'user')
+    @user = User.create(name: 'user')
     @old_post = Post.create(title: 'old_post')
     @new_post = Post.create(title: 'new_post')
-    Activation.create(user: user, post: @old_post, activated_at: '2020-01-01')
-    Activation.create(user: user, post: @new_post, activated_at: '2020-01-02')
+    Activation.create(user: @user, post: @old_post, activated_at: '2020-01-01')
+    Activation.create(user: @user, post: @new_post, activated_at: '2020-01-02')
   end
 
   # NG!
@@ -153,6 +160,29 @@ describe 'verify "DISTINCT ON" queries' do
     assert_equal latest_activated_posts_each_users.where(title: 'old_post'), []
     assert_equal latest_activated_posts_each_users.size, 1
     assert_equal latest_activated_posts_each_users.count, 1
+  end
+
+  it '#5 EXPECTED: Using inherited AR model' do
+    latest_activated_posts_each_users = LastActivatedPost.all
+    assert_equal latest_activated_posts_each_users.to_sql, %(
+    SELECT "posts".*
+    FROM "posts"
+    INNER JOIN "activations" ON "activations"."post_id" = "posts"."id"
+    AND "activations"."id" IN
+      (SELECT DISTINCT ON (user_id) id
+       FROM "activations"
+       ORDER BY user_id,
+                activated_at DESC)
+    ).gsub(/\s{1,}/, "\s").strip
+    assert_equal latest_activated_posts_each_users, [@new_post.becomes(LastActivatedPost)]
+    assert_equal latest_activated_posts_each_users.first, @new_post.becomes(LastActivatedPost)
+    assert_equal latest_activated_posts_each_users.where(title: 'old_post'), []
+    assert_equal latest_activated_posts_each_users.size, 1
+    assert_equal latest_activated_posts_each_users.count, 1
+  end
+
+  it 'user#latest_activated_post' do
+    assert_equal @user.latest_activated_post, @new_post
   end
 
   after :all do
