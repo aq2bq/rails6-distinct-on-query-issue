@@ -52,11 +52,17 @@ end
 class Post < ActiveRecord::Base
   has_many :activations
   has_many :users, through: :activations
+
+  # for #3
+  has_many :latest_activations, -> { where(id: latests) }, class_name: 'Activation'
 end
 
 class Activation < ActiveRecord::Base
   belongs_to :user, dependent: :delete
   belongs_to :post, dependent: :delete
+
+  # for #3
+  scope :latests, -> { select('DISTINCT ON (user_id) id').order('user_id, activated_at DESC') }
 end
 
 require 'minitest/autorun'
@@ -71,13 +77,20 @@ describe 'verify "DISTINCT ON" queries' do
 
   # NG!
   it "#1 EXPECTED" do
-    latest_activated_posts_each_users = Post.joins(:activations).select("distinct on (user_id) *").order("user_id, activated_at desc")
+    latest_activated_posts_each_users = Post.joins(:activations).select("DISTINCT ON (user_id) *").order("user_id, activated_at DESC")
     assert_equal latest_activated_posts_each_users, [@new_post]
     assert_equal latest_activated_posts_each_users.size, 1
   end
 
   it '#1 NOT EXPECTED' do
-    latest_activated_posts_each_users = Post.joins(:activations).select("distinct on (user_id) *").order("user_id, activated_at desc")
+    latest_activated_posts_each_users = Post.joins(:activations).select("DISTINCT ON (user_id) *").order("user_id, activated_at DESC")
+    assert_equal latest_activated_posts_each_users.to_sql, %(
+    SELECT DISTINCT ON (user_id) *
+    FROM "posts"
+    INNER JOIN "activations" ON "activations"."post_id" = "posts"."id"
+    ORDER BY user_id,
+             activated_at DESC
+    ).gsub(/\s{1,}/, "\s").strip
     assert_equal latest_activated_posts_each_users.where(title: 'old_post'), [@old_post]
     assert_raises ActiveRecord::StatementInvalid do
       latest_activated_posts_each_users.count
@@ -85,8 +98,35 @@ describe 'verify "DISTINCT ON" queries' do
   end
 
   # OK!
-  it '#2 EXPECTED' do
-    latest_activated_posts_each_users = Post.from(Post.joins(:activations).select("distinct on (user_id) *").order("user_id, activated_at desc"), :posts)
+  it '#2 EXPECTED: Using sub-query into "AR.from" method' do
+    latest_activated_posts_each_users = Post.from(Post.joins(:activations).select("DISTINCT ON (user_id) *").order("user_id, activated_at DESC"), :posts)
+    assert_equal latest_activated_posts_each_users.to_sql, %(
+    SELECT "posts".*
+    FROM
+      (SELECT DISTINCT ON (user_id) *
+       FROM "posts"
+       INNER JOIN "activations" ON "activations"."post_id" = "posts"."id"
+       ORDER BY user_id,
+                activated_at DESC) posts
+    ).gsub(/\s{1,}/, "\s").strip
+    assert_equal latest_activated_posts_each_users, [@new_post]
+    assert_equal latest_activated_posts_each_users.where(title: 'old_post'), []
+    assert_equal latest_activated_posts_each_users.size, 1
+    assert_equal latest_activated_posts_each_users.count, 1
+  end
+
+  it '#3 EXPECTED: Using AR-scope' do
+    latest_activated_posts_each_users = Post.joins(:latest_activations)
+    assert_equal latest_activated_posts_each_users.to_sql, %(
+    SELECT "posts".*
+    FROM "posts"
+    INNER JOIN "activations" ON "activations"."post_id" = "posts"."id"
+    AND "activations"."id" IN
+      (SELECT DISTINCT ON (user_id) id
+       FROM "activations"
+       ORDER BY user_id,
+                activated_at DESC)
+    ).gsub(/\s{1,}/, "\s").strip
     assert_equal latest_activated_posts_each_users, [@new_post]
     assert_equal latest_activated_posts_each_users.where(title: 'old_post'), []
     assert_equal latest_activated_posts_each_users.size, 1
